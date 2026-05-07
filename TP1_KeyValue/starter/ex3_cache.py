@@ -31,19 +31,27 @@ def get_product_cached(r, product_id: int, ttl: int = 600) -> Optional[dict]:
     4. Afficher si c'est un HIT ou MISS avec la latence
     """
     start = time.time()
-    
-    # TODO: Implémenter le pattern Cache-Aside
-    # Utiliser json.dumps/json.loads pour sérialiser
-    
-    elapsed = time.time() - start
-    # TODO: Afficher "CACHE HIT (Xms)" ou "CACHE MISS (Xms)"
-    pass
+    cache_key = f"product_cache:{product_id}"
+
+    cached = r.get(cache_key)
+    if cached is not None:
+        elapsed = (time.time() - start) * 1000
+        print(f"CACHE HIT ({elapsed:.1f}ms)")
+        return json.loads(cached)
+
+    # MISS: aller chercher en base
+    product = slow_db_get_product(product_id)
+    if product is not None:
+        r.setex(cache_key, ttl, json.dumps(product))
+
+    elapsed = (time.time() - start) * 1000
+    print(f"CACHE MISS ({elapsed:.1f}ms)")
+    return product
 
 
 def invalidate_product_cache(r, product_id: int):
     """Supprimer le cache d'un produit (après mise à jour en DB)"""
-    # TODO
-    pass
+    r.delete(f"product_cache:{product_id}")
 
 
 def benchmark_cache(r, product_id: int, iterations: int = 20):
@@ -54,19 +62,43 @@ def benchmark_cache(r, product_id: int, iterations: int = 20):
     - Temps moyen cache MISS
     - Taux de cache hit (%)
     """
-    # TODO
-    pass
+    hit_times = []
+    miss_times = []
+
+    # S'assurer que le cache est vide pour le premier appel
+    invalidate_product_cache(r, product_id)
+
+    for i in range(iterations):
+        cache_key = f"product_cache:{product_id}"
+        is_cached = r.exists(cache_key)
+
+        start = time.time()
+        get_product_cached(r, product_id)
+        elapsed = (time.time() - start) * 1000
+
+        if is_cached:
+            hit_times.append(elapsed)
+        else:
+            miss_times.append(elapsed)
+
+    total = len(hit_times) + len(miss_times)
+    hit_rate = (len(hit_times) / total) * 100 if total > 0 else 0
+
+    print(f"\n--- Résultats Benchmark ({iterations} itérations) ---")
+    print(f"Temps moyen MISS : {sum(miss_times)/len(miss_times):.1f}ms" if miss_times else "Aucun MISS")
+    print(f"Temps moyen HIT  : {sum(hit_times)/len(hit_times):.1f}ms" if hit_times else "Aucun HIT")
+    print(f"Taux de cache hit: {hit_rate:.1f}%")
 
 
 if __name__ == "__main__":
     r.flushdb()
-    
+
     print("=== Test Cache-Aside ===")
     print("\nPremier appel (MISS attendu):")
     get_product_cached(r, 1)
-    
+
     print("\nDeuxième appel (HIT attendu):")
     get_product_cached(r, 1)
-    
+
     print("\n=== Benchmark ===")
     benchmark_cache(r, 1, iterations=10)
